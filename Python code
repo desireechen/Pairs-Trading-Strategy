@@ -1,0 +1,68 @@
+import numpy as np
+ 
+def initialize(context):
+
+    # Check status of the pair every day 60 minutes before market close
+    schedule_function(check_pair_status, date_rules.every_day(), time_rules.market_close(minutes=60))
+    
+    context.stock1 = sid(48421) # This is JP Morgan Diversified Return Emerging Markets Equity ETF.
+    context.stock2 = sid(47135) # This is JP Morgan Diversified Return Global Equity ETF.
+    
+    # We set the thresholds for entering or exiting the position.
+    context.entry_threshold = 0.5
+    context.exit_threshold = 0.1
+    
+    # Moving average lengths
+    context.ma_long_length = 5 # this is the long horizon
+    context.ma_short_length = 2 # this is the short horizon
+    
+    # Indicators for whether we are in a trade or not. False means that we are not in the trade. We start of with False, because we are currently not in any long or short positions.
+    context.currently_long_the_spread = False
+    context.currently_short_the_spread = False
+
+def check_pair_status(context, data):
+
+    # Define the stocks
+    s1 = context.stock1
+    s2 = context.stock2
+
+    # Get pricing history for the long horizon
+    prices = data.history([s1, s2], "price", context.ma_long_length, '1d')
+    # Get pricing history for the short horizon
+    short_prices = prices.iloc[-context.ma_short_length:]
+    
+    # Get the mean of the spread over the long horizon
+    ma_long = np.mean(prices[s1] - prices[s2])
+    # Get the standard deviation of the spread over the long horizon
+    stdev = np.std(prices[s1] - prices[s2])  
+    # Get the mean of the spread over the short horizon
+    ma_short = np.mean(short_prices[s1] - short_prices[s2])
+    
+    # Compute the zscore of the spread. This tells us how extreme the spread is. 
+    if stdev > 0:
+        zscore = (ma_short - ma_long)/stdev
+    
+        # There are two entry cases; one for taking a short position, the other for taking a long position.
+        # The first case is when zscore is above the zscore threshold and we are currently not in a SHORT trade.
+        if zscore > context.entry_threshold and (not context.currently_short_the_spread):
+            order_target_percent(s1, -0.5) # short Emerging Market Equity ETF
+            order_target_percent(s2, 0.5) # long Global Equity ETF
+            context.currently_short_the_spread = True # Now that we have taken a short position on the spread, we assign the value of True to this variable.
+            context.currently_long_the_spread = False # Now that we have taken a short position on the spread, we assign the value of False to this variable.
+        
+        # The second case is when zscore is below the zscore threshold and we are currently not in a LONG trade.  
+        elif zscore < -context.entry_threshold and (not context.currently_long_the_spread):
+            order_target_percent(s1, 0.5) # long Emerging Market Equity ETF
+            order_target_percent(s2, -0.5) # short Global Equity ETF
+            context.currently_short_the_spread = False # Now that we have taken a long position on the spread, we assign the value of False to this variable.
+            context.currently_long_the_spread = True # Now that we have taken a long position on the spread, we assign the value of True to this variable.
+            
+        # This is the exit case. 
+        # When the zscore is less than the exit threshold, that is, when the zscore approaches zero, we exit the position. 
+        elif abs(zscore) < context.exit_threshold:
+            order_target_percent(s1, 0) # Do not long or short any ETF.
+            order_target_percent(s2, 0) # Do not long or short any ETF.
+            context.currently_short_the_spread = False # Now that we have exited the position, the value of this is assigned back to its initial value False.
+            context.currently_long_the_spread = False # Now that we have exited the position, the value of this is assigned back to its initial value False.
+        
+        record('zscore', zscore) # To create the zscore graph.
